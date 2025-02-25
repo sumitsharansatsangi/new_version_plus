@@ -1,4 +1,4 @@
-library new_version_plus;
+library;
 
 import 'dart:convert';
 import 'dart:io';
@@ -118,8 +118,7 @@ class NewVersionPlus {
   }) async {
     final VersionStatus? versionStatus = await getVersionStatus();
 
-    if (versionStatus != null && versionStatus.canUpdate) {
-      // ignore: use_build_context_synchronously
+    if (versionStatus != null && versionStatus.canUpdate && context.mounted) {
       showUpdateDialog(
         context: context,
         versionStatus: versionStatus,
@@ -138,33 +137,47 @@ class NewVersionPlus {
     } else if (Platform.isAndroid) {
       return _getAndroidStoreVersion(packageInfo);
     } else {
-      debugPrint(
-          'The target platform "${Platform.operatingSystem}" is not yet supported by this package.');
+      debugPrint('The target platform "${Platform.operatingSystem}" is not yet supported by this package.');
       return null;
     }
   }
 
   /// This function attempts to clean local version strings so they match the MAJOR.MINOR.PATCH
   /// versioning pattern, so they can be properly compared with the store version.
-  String _getCleanVersion(String version) =>
-      RegExp(r'\d+\.\d+(\.\d+)?').stringMatch(version) ?? '0.0.0';
-  //RegExp(r'\d+\.\d+(\.[a-z]+)?(\.([^"]|\\")*)?').stringMatch(version) ?? '0.0.0';
+  String _getCleanVersion(String version) => RegExp(r'\d+(\.\d+)?(\.\d+)?').stringMatch(version) ?? '0.0.0';
+  // RegExp(r'\d+\.\d+(\.\d+)?').stringMatch(version) ?? '0.0.0';
+  //RegExp(r'\d+\.\d+(\.[a-z]+)?(\.([^"]|\\")*)?').stringMatch(version) ?? '0.0.0'; \d+(\.\d+)?(\.\d+)?
 
   /// iOS info is fetched by using the iTunes lookup API, which returns a
   /// JSON document.
   Future<VersionStatus?> _getiOSStoreVersion(PackageInfo packageInfo) async {
     final id = iOSId ?? packageInfo.packageName;
-     Map<String, dynamic> parameters = {};
-    if(id.contains('.')){
+    // final parameters = {"bundleId": id};
+
+    Map<String, dynamic> parameters = {};
+
+    /// programmermager:fix/issue-35-ios-failed-host-lookup
+    if (id.contains('.')) {
       parameters['bundleId'] = id;
-    }else{
-      parameters['id']= id;
+    } else {
+      parameters['id'] = id;
     }
+
+    parameters['timestamp'] = DateTime.now().millisecondsSinceEpoch.toString();
+
     if (iOSAppStoreCountry != null) {
       parameters.addAll({"country": iOSAppStoreCountry!});
     }
     var uri = Uri.https("itunes.apple.com", "/lookup", parameters);
-    final response = await http.get(uri);
+    // final response = await http.get(uri);
+    http.Response response;
+    try {
+      response = await http.get(uri);
+    } catch (e) {
+      debugPrint('Failed to query iOS App Store\n$e');
+      return null;
+    }
+
     if (response.statusCode != 200) {
       debugPrint('Failed to query iOS App Store');
       return null;
@@ -177,8 +190,7 @@ class NewVersionPlus {
     }
     return VersionStatus._(
       localVersion: _getCleanVersion(packageInfo.version),
-      storeVersion:
-          _getCleanVersion(forceAppVersion ?? jsonObj['results'][0]['version']),
+      storeVersion: _getCleanVersion(forceAppVersion ?? jsonObj['results'][0]['version']),
       originalStoreVersion: forceAppVersion ?? jsonObj['results'][0]['version'],
       appStoreLink: jsonObj['results'][0]['trackViewUrl'],
       releaseNotes: jsonObj['results'][0]['releaseNotes'],
@@ -186,33 +198,40 @@ class NewVersionPlus {
   }
 
   /// Android info is fetched by parsing the html of the app store page.
-  Future<VersionStatus?> _getAndroidStoreVersion(
-      PackageInfo packageInfo) async {
+  Future<VersionStatus?> _getAndroidStoreVersion(PackageInfo packageInfo) async {
     final id = androidId ?? packageInfo.packageName;
-    final uri = Uri.https("play.google.com", "/store/apps/details",
-        {"id": id.toString(), "hl": androidPlayStoreCountry ?? "en_US"});
-    final response = await http.get(uri);
+    // final uri = Uri.https("play.google.com", "/store/apps/details", {"id": id.toString(), "hl": androidPlayStoreCountry ?? "en_US"});
+    // final response = await http.get(uri);
+    final uri = Uri.https("play.google.com", "/store/apps/details", {
+      "id": id.toString(),
+      "hl": androidPlayStoreCountry ?? "en_US",
+      "timestamp": DateTime.now().millisecondsSinceEpoch.toString(),
+    });
+    http.Response response;
+    try {
+      response = await http.get(uri);
+    } catch (e) {
+      debugPrint('Failed to query Google Play Store\n$e');
+      return null;
+    }
+
     if (response.statusCode != 200) {
       throw Exception("Invalid response code: ${response.statusCode}");
     }
     // Supports 1.2.3 (most of the apps) and 1.2.prod.3 (e.g. Google Cloud)
     //final regexp = RegExp(r'\[\[\["(\d+\.\d+(\.[a-z]+)?\.\d+)"\]\]');
-    final regexp =
-        RegExp(r'\[\[\[\"(\d+\.\d+(\.[a-z]+)?(\.([^"]|\\")*)?)\"\]\]');
+    final regexp = RegExp(r'\[\[\[\"(\d+\.\d+(\.[a-z]+)?(\.([^"]|\\")*)?)\"\]\]');
     final storeVersion = regexp.firstMatch(response.body)?.group(1);
 
     //Description
     //final regexpDescription = RegExp(r'\[\[(null,)\"((\.[a-z]+)?(([^"]|\\")*)?)\"\]\]');
 
     //Release
-    final regexpRelease =
-        RegExp(r'\[(null,)\[(null,)\"((\.[a-z]+)?(([^"]|\\")*)?)\"\]\]');
+    final regexpRelease = RegExp(r'\[(null,)\[(null,)\"((\.[a-z]+)?(([^"]|\\")*)?)\"\]\]');
 
-    final expRemoveSc = RegExp(r"\\u003c[A-Za-z]{1,10}\\u003e",
-        multiLine: true, caseSensitive: true);
+    final expRemoveSc = RegExp(r"\\u003c[A-Za-z]{1,10}\\u003e", multiLine: true, caseSensitive: true);
 
-    final expRemoveQuote =
-        RegExp(r"\\u0026quot;", multiLine: true, caseSensitive: true);
+    final expRemoveQuote = RegExp(r"\\u0026quot;", multiLine: true, caseSensitive: true);
 
     final releaseNotes = regexpRelease.firstMatch(response.body)?.group(3);
     //final descriptionNotes = regexpDescription.firstMatch(response.body)?.group(2);
@@ -222,11 +241,7 @@ class NewVersionPlus {
       storeVersion: _getCleanVersion(forceAppVersion ?? storeVersion ?? ""),
       originalStoreVersion: forceAppVersion ?? storeVersion ?? "",
       appStoreLink: uri.toString(),
-      releaseNotes: androidHtmlReleaseNotes
-          ? _parseUnicodeToString(releaseNotes)
-          : releaseNotes
-              ?.replaceAll(expRemoveSc, '')
-              .replaceAll(expRemoveQuote, '"'),
+      releaseNotes: androidHtmlReleaseNotes ? _parseUnicodeToString(releaseNotes) : releaseNotes?.replaceAll(expRemoveSc, '').replaceAll(expRemoveQuote, '"'),
     );
   }
 
@@ -266,13 +281,10 @@ class NewVersionPlus {
   }) async {
     final dialogTitleWidget = Text(dialogTitle);
     final dialogTextWidget = Text(
-      dialogText ??
-          'You can now update this app from ${versionStatus.localVersion} to ${versionStatus.storeVersion}',
+      dialogText ?? 'You can now update this app from ${versionStatus.localVersion} to ${versionStatus.storeVersion}',
     );
 
-    final launchMode = launchModeVersion == LaunchModeVersion.external
-        ? LaunchMode.externalApplication
-        : LaunchMode.platformDefault;
+    final launchMode = launchModeVersion == LaunchModeVersion.external ? LaunchMode.externalApplication : LaunchMode.platformDefault;
 
     final updateButtonTextWidget = Text(updateButtonText);
 
@@ -368,8 +380,7 @@ class NewVersionPlus {
       var matches = re.allMatches(release);
       var codePoints = <int>[];
       for (var match in matches) {
-        var codePoint =
-            match.namedGroup('asciiValue') ?? match.namedGroup('codePoint');
+        var codePoint = match.namedGroup('asciiValue') ?? match.namedGroup('codePoint');
         if (codePoint != null) {
           codePoints.add(int.parse(codePoint, radix: 16));
         } else {
